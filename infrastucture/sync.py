@@ -1,4 +1,3 @@
-###File Synchronizer
 import os
 import shutil
 import socket
@@ -8,23 +7,27 @@ KANISHKA_BASE_PATH = './Kanishka'
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def handle_sync(event_type, path):
-    full_path = os.path.join(KANISHKA_BASE_PATH, path)
+def handle_sync(event_type, relative_path):
+    full_path = os.path.join(KANISHKA_BASE_PATH, relative_path)
     logging.info(f"Handling {event_type} event for {full_path}")
     try:
         if event_type == 'created':
             if os.path.isdir(full_path):
-                shutil.copytree(full_path, os.path.join(KANISHKA_BASE_PATH, os.path.basename(path)))
+                os.makedirs(full_path, exist_ok=True)
             else:
-                shutil.copy2(full_path, KANISHKA_BASE_PATH)
+                # Create directories if they don't exist
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                open(full_path, 'a').close()  # Create an empty file
         elif event_type == 'deleted':
-            target_path = os.path.join(KANISHKA_BASE_PATH, os.path.basename(path))
-            if os.path.isdir(target_path):
-                shutil.rmtree(target_path)
+            if os.path.isdir(full_path):
+                shutil.rmtree(full_path)
             else:
-                os.remove(target_path)
+                if os.path.exists(full_path):
+                    os.remove(full_path)
         elif event_type == 'modified':
-            shutil.copy2(full_path, KANISHKA_BASE_PATH)
+            if not os.path.exists(full_path):
+                # Handle the case where the file doesn't exist locally
+                open(full_path, 'a').close()  # Create an empty file
     except Exception as e:
         logging.error(f"Error handling {event_type} event for {full_path}: {e}")
 
@@ -40,10 +43,10 @@ def start_sync_server():
                 logging.info(f"Raw data received: {data}")
                 if data:
                     try:
-                        event_type, path = data.split(':', 1)  # Limit split to the first colon
-                        logging.info(f"Received {event_type} event for {path} from {addr}")
-                        handle_sync(event_type, path)
+                        event_type, relative_path = data.split(':', 1)
+                        logging.info(f"Received {event_type} event for {relative_path} from {addr}")
+                        handle_sync(event_type, relative_path)
                     except ValueError:
-                        logging.error(f"Error splitting data: {data}")
+                        logging.error(f"Error parsing data: {data}")
 
 start_sync_server()
