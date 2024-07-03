@@ -1,52 +1,47 @@
-import os
-import shutil
+import time
 import socket
-import logging
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from node_manage import read_nodes
 
-KANISHKA_BASE_PATH = './Kanishka'
+KANISHKA_FOLDER = 'Kanishka'
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+class FolderEventHandler(FileSystemEventHandler):
+    def __init__(self, nodes):
+        self.nodes = nodes
 
-def handle_sync(event_type, relative_path):
-    full_path = os.path.join(KANISHKA_BASE_PATH, relative_path)
-    logging.info(f"Handling {event_type} event for {full_path}")
-    try:
-        if event_type == 'created':
-            if os.path.isdir(full_path):
-                os.makedirs(full_path, exist_ok=True)
-            else:
-                # Create directories if they don't exist
-                os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                open(full_path, 'a').close()  # Create an empty file
-        elif event_type == 'deleted':
-            if os.path.isdir(full_path):
-                shutil.rmtree(full_path)
-            else:
-                if os.path.exists(full_path):
-                    os.remove(full_path)
-        elif event_type == 'modified':
-            if not os.path.exists(full_path):
-                # Handle the case where the file doesn't exist locally
-                open(full_path, 'a').close()  # Create an empty file
-    except Exception as e:
-        logging.error(f"Error handling {event_type} event for {full_path}: {e}")
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.sync_event(event)
 
-def start_sync_server():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 9999))
-        s.listen()
-        logging.info("Sync server started, waiting for connections...")
-        while True:
-            conn, addr = s.accept()
-            with conn:
-                data = conn.recv(1024).decode()
-                logging.info(f"Raw data received: {data}")
-                if data:
-                    try:
-                        event_type, relative_path = data.split(':', 1)
-                        logging.info(f"Received {event_type} event for {relative_path} from {addr}")
-                        handle_sync(event_type, relative_path)
-                    except ValueError:
-                        logging.error(f"Error parsing data: {data}")
+    def on_created(self, event):
+        self.sync_event(event)
 
-start_sync_server()
+    def on_deleted(self, event):
+        self.sync_event(event)
+
+    def sync_event(self, event):
+        for node in self.nodes:
+            self.notify_node(node, event.src_path, event.event_type)
+
+    def notify_node(self, node, path, event_type):
+        message = f'{event_type}:{path[len(KANISHKA_FOLDER)+1:]}'
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.connect((node, 9999))
+                s.sendall(message.encode())
+            except Exception as e:
+                print(f"Failed to notify {node}: {e}")
+
+nodes = read_nodes()
+event_handler = FolderEventHandler(nodes)
+observer = Observer()
+observer.schedule(event_handler, KANISHKA_FOLDER, recursive=True)
+observer.start()
+
+try:
+    while True:
+        time.sleep(20)
+except KeyboardInterrupt:
+    observer.stop()
+observer.join()
